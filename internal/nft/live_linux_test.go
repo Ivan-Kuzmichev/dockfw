@@ -29,7 +29,7 @@ func TestLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer guard.Close()
+	defer func() { _ = guard.Close() }()
 	if err := guard.SelfTest(); err != nil {
 		t.Fatalf("setns self-test: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer h.Close()
+	defer func() { _ = h.Close() }()
 
 	p := policy.Policy{
 		Container: "live", Mode: policy.ModeEnforce, Internet: true,
