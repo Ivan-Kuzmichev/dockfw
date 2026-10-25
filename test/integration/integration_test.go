@@ -41,7 +41,8 @@ func TestMain(m *testing.M) {
 			return 1
 		}
 		if out, err := compose("up", "-d", "--wait", "--scale", fmt.Sprintf("filler=%d", fillers)); err != nil {
-			fmt.Fprintln(os.Stderr, "compose up failed:", out)
+			logs, _ := run("docker", "logs", daemon)
+			fmt.Fprintln(os.Stderr, "compose up failed:", out, "\n--- daemon logs\n", logs)
 			return 1
 		}
 		if os.Getenv("DOCKFW_IT_KEEP") == "" {
