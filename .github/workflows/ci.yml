@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod }
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with: { version: v2.15.0 }
       - run: go vet ./...
       - run: go run honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION} ./...
