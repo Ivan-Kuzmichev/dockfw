@@ -1,3 +1,5 @@
+//go:build linux
+
 // Command dockfw applies nftables rules inside Docker containers' network
 // namespaces based on container labels.
 package main
@@ -14,6 +16,8 @@ import (
 
 	"github.com/Ivan-Kuzmichev/dockfw/internal/config"
 	"github.com/Ivan-Kuzmichev/dockfw/internal/daemon"
+	"github.com/Ivan-Kuzmichev/dockfw/internal/docker"
+	"github.com/Ivan-Kuzmichev/dockfw/internal/netns"
 )
 
 // Set at build time via -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
@@ -67,7 +71,24 @@ func run(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	<-ctx.Done()
-	log.Info("shutting down")
+	dc, err := docker.New()
+	if err != nil {
+		log.Error("cannot create docker client", "error", err)
+		return 1
+	}
+	defer func() { _ = dc.Close() }()
+
+	guard, err := netns.NewGuard()
+	if err != nil {
+		log.Error("cannot open host/own network namespace (is pid: host set?)", "error", err)
+		return 1
+	}
+	defer func() { _ = guard.Close() }()
+
+	d := daemon.New(cfg, log, dc, &daemon.NetnsEnforcer{Guard: guard}, nil)
+	if err := d.Run(ctx); err != nil {
+		log.Error("daemon failed", "error", err)
+		return 1
+	}
 	return 0
 }
