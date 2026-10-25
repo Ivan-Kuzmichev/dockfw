@@ -18,6 +18,7 @@ import (
 	"github.com/Ivan-Kuzmichev/dockfw/internal/daemon"
 	"github.com/Ivan-Kuzmichev/dockfw/internal/docker"
 	"github.com/Ivan-Kuzmichev/dockfw/internal/netns"
+	"github.com/Ivan-Kuzmichev/dockfw/internal/resolver"
 )
 
 // Set at build time via -ldflags "-X main.version=... -X main.commit=... -X main.date=...".
@@ -85,7 +86,8 @@ func run(args []string) int {
 	}
 	defer func() { _ = guard.Close() }()
 
-	d := daemon.New(cfg, log, dc, &daemon.NetnsEnforcer{Guard: guard}, nil)
+	lookup := &resolver.Lookuper{Guard: guard}
+	d := daemon.New(cfg, log, dc, &daemon.NetnsEnforcer{Guard: guard}, lookup)
 	if err := d.Run(ctx); err != nil {
 		log.Error("daemon failed", "error", err)
 		return 1

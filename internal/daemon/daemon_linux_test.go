@@ -20,6 +20,7 @@ import (
 	"github.com/Ivan-Kuzmichev/dockfw/internal/docker"
 	"github.com/Ivan-Kuzmichev/dockfw/internal/nft"
 	"github.com/Ivan-Kuzmichev/dockfw/internal/policy"
+	"github.com/Ivan-Kuzmichev/dockfw/internal/resolver"
 )
 
 type fakeDocker struct {
@@ -171,6 +172,10 @@ func start(t *testing.T, tweak func(*config.Config), initial ...*docker.Info) *h
 
 // startWith lets the test prepare the fake enforcer before the daemon runs.
 func startWith(t *testing.T, tweak func(*config.Config), prep func(*fakeEnforcer), initial ...*docker.Info) *harness {
+	return startFull(t, tweak, prep, nil, initial...)
+}
+
+func startFull(t *testing.T, tweak func(*config.Config), prep func(*fakeEnforcer), lookup Lookuper, initial ...*docker.Info) *harness {
 	t.Helper()
 	cfg, err := config.Load(func(string) string { return "" })
 	if err != nil {
@@ -187,7 +192,7 @@ func startWith(t *testing.T, tweak func(*config.Config), prep func(*fakeEnforcer
 	for _, i := range initial {
 		h.docker.containers[i.ID] = i
 	}
-	h.d = New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), h.docker, h.enf, nil)
+	h.d = New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), h.docker, h.enf, lookup)
 	h.d.heartbeatPath = filepath.Join(t.TempDir(), "alive")
 	h.d.retryDelays = []time.Duration{time.Millisecond, time.Millisecond}
 
@@ -447,5 +452,59 @@ func TestQueueCoalescesAndSerializes(t *testing.T) {
 	q.close()
 	if _, _, ok := q.get(); ok {
 		t.Error("closed queue returned a job")
+	}
+}
+
+type fakeLookup struct {
+	mu      sync.Mutex
+	answers map[string][]resolver.Answer
+	calls   map[int]int
+}
+
+func (f *fakeLookup) Lookup(_ context.Context, pid int, names []string) ([]resolver.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls[pid]++
+	var out []resolver.Result
+	for _, n := range names {
+		a, ok := f.answers[n]
+		r := resolver.Result{Name: n, Answers: a}
+		if !ok {
+			r.Err = errors.New("NXDOMAIN")
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+func TestDomainsResolvedAndFiltered(t *testing.T) {
+	lookup := &fakeLookup{calls: map[int]int{}, answers: map[string][]resolver.Answer{
+		"api.themoviedb.org": {
+			{Addr: netip.MustParseAddr("13.224.1.1"), TTL: time.Hour},
+			{Addr: netip.MustParseAddr("192.168.1.1"), TTL: time.Hour}, // rebinding attempt
+		},
+		"image.tmdb.org": {{Addr: netip.MustParseAddr("13.224.2.2"), TTL: time.Second}},
+	}}
+	a := info("a", 101, "172.20.0.2", map[string]string{
+		"fw.enable":        "true",
+		"fw.allow.domains": "api.themoviedb.org, image.tmdb.org, missing.example, *.tmdb.org",
+	})
+	h := startFull(t, func(c *config.Config) { c.ResolveInterval = time.Hour }, nil, lookup)
+	h.docker.start(a) // start triggers an immediate resolve, no ticker needed
+
+	h.eventually("domains in set", h.tableHas(101, "13.224.1.1 timeout 1h59m", "13.224.2.2 timeout 4m5"))
+	if tbl, _ := h.enf.table(101); strings.Contains(tbl.text, "192.168.1.1") {
+		t.Error("private address from DNS was allowed")
+	}
+
+	// Locked containers are never resolved.
+	b := info("b", 102, "172.20.0.3", map[string]string{"fw.enable": "true", "fw.allow.domains": "api.themoviedb.org", "fw.mode": "x"})
+	h.docker.start(b)
+	h.eventually("b locked", h.tableHas(102))
+	time.Sleep(20 * time.Millisecond)
+	lookup.mu.Lock()
+	defer lookup.mu.Unlock()
+	if lookup.calls[102] != 0 {
+		t.Error("locked container resolved")
 	}
 }

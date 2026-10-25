@@ -16,6 +16,7 @@ import (
 	"github.com/Ivan-Kuzmichev/dockfw/internal/docker"
 	"github.com/Ivan-Kuzmichev/dockfw/internal/nft"
 	"github.com/Ivan-Kuzmichev/dockfw/internal/policy"
+	"github.com/Ivan-Kuzmichev/dockfw/internal/resolver"
 )
 
 // Docker is the subset of the Docker API the daemon needs.
@@ -37,10 +38,9 @@ type Enforcer interface {
 	Verify(pid int, rs *nft.Ruleset) error
 }
 
-// Domains supplies the currently resolved addresses of a container's
-// fw.allow.domains.
-type Domains interface {
-	Elements(containerID string, now time.Time) []nft.DomainElem
+// Lookuper resolves names from inside the netns of pid.
+type Lookuper interface {
+	Lookup(ctx context.Context, pid int, names []string) ([]resolver.Result, error)
 }
 
 const workers = 4
@@ -52,14 +52,15 @@ type Daemon struct {
 	log     *slog.Logger
 	docker  Docker
 	enf     Enforcer
-	domains Domains
+	lookup  Lookuper
+	cache   *resolver.Cache
 
 	now           func() time.Time
 	retryDelays   []time.Duration
 	heartbeatPath string
-	// resolveHook is called for containers whose domains should be resolved
-	// right away (spec §5 step 6). Set by the resolver wiring.
-	resolveHook func(id string)
+	// resolveNow carries containers whose domains must be resolved right
+	// away, without waiting for the ticker (spec §5 step 6).
+	resolveNow chan string
 
 	mu           sync.Mutex
 	containers   map[string]*entry
@@ -78,14 +79,16 @@ type entry struct {
 	requested string
 }
 
-// New creates a daemon. domains may be nil.
-func New(cfg config.Config, log *slog.Logger, d Docker, enf Enforcer, domains Domains) *Daemon {
+// New creates a daemon. lookup may be nil (no domain resolution).
+func New(cfg config.Config, log *slog.Logger, d Docker, enf Enforcer, lookup Lookuper) *Daemon {
 	return &Daemon{
 		cfg:           cfg,
 		log:           log,
 		docker:        d,
 		enf:           enf,
-		domains:       domains,
+		lookup:        lookup,
+		cache:         resolver.NewCache(),
+		resolveNow:    make(chan string, 64),
 		now:           time.Now,
 		retryDelays:   []time.Duration{100 * time.Millisecond, 500 * time.Millisecond},
 		heartbeatPath: HeartbeatPath,
@@ -110,6 +113,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 	if d.cfg.ReconcileInterval > 0 {
 		go d.every(ctx, d.cfg.ReconcileInterval, func() { d.scheduleAll(jobVerify) })
+	}
+	if d.lookup != nil {
+		go d.resolveLoop(ctx)
 	}
 
 	d.heartbeat()
@@ -275,8 +281,11 @@ func (d *Daemon) handle(ctx context.Context, ev docker.Event) {
 	}
 	// Peers of other containers may have changed (spec §5 steps 3-5).
 	d.scheduleChanged()
-	if ev.Kind == docker.EventStart && d.resolveHook != nil {
-		d.resolveHook(ev.ContainerID)
+	if ev.Kind == docker.EventStart {
+		select {
+		case d.resolveNow <- ev.ContainerID:
+		default: // the ticker will catch up
+		}
 	}
 }
 
@@ -284,6 +293,7 @@ func (d *Daemon) forget(id string) {
 	d.mu.Lock()
 	delete(d.containers, id)
 	d.mu.Unlock()
+	d.cache.Forget(id)
 }
 
 // noteSkipped logs containers whose netns dockfw must never touch.
@@ -428,8 +438,8 @@ func (d *Daemon) sync(ctx context.Context, id string, kind jobKind) {
 	}
 
 	var elems []nft.DomainElem
-	if d.domains != nil {
-		elems = d.domains.Elements(id, d.now())
+	for _, e := range d.cache.Elements(id, d.now()) {
+		elems = append(elems, nft.DomainElem{Addr: e.Addr, Timeout: e.Timeout})
 	}
 	rs := nft.Build(pol, elems, nft.Options{RejectAsDrop: rejectAsDrop})
 	log.Debug("generated ruleset", "hash", hash, "policy", pol.Text(), "ruleset", rs.Text())
@@ -466,7 +476,11 @@ func (d *Daemon) sync(ctx context.Context, id string, kind jobKind) {
 		d.markDegraded(id, info)
 	default:
 		d.markApplied(id, info, hash)
-		log.Info("policy applied", append(attrs, "duration", d.now().Sub(start).String())...)
+		level := slog.LevelInfo
+		if kind == jobRebuild && applied == hash {
+			level = slog.LevelDebug // periodic domain refresh, nothing new
+		}
+		log.Log(ctx, level, "policy applied", append(attrs, "duration", d.now().Sub(start).String())...)
 	}
 }
 
