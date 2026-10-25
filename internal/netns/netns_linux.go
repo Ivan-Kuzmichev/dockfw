@@ -5,6 +5,7 @@ package netns
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"runtime"
 
@@ -48,29 +49,41 @@ func open(path string) (*Handle, error) {
 	return &Handle{f: f, dev: st.Dev, ino: st.Ino}, nil
 }
 
-// Guard knows which namespaces are off limits.
+// Guard knows which namespaces are off limits and checks that a namespace
+// really belongs to the expected container before anything enters it.
 type Guard struct {
-	host *Handle
+	host *Handle // nil when the kernel (AppArmor) does not let us open it
 	self *Handle
+	// procRoot is "/proc"; tests may point it elsewhere.
+	procRoot string
 }
 
-// NewGuard opens the host (PID 1) and own network namespaces.
+// NewGuard opens the daemon's own network namespace and, if permitted, the
+// host's (PID 1 with pid: host). Under AppArmor's docker-default profile
+// opening /proc/1/ns/net is denied; HostKnown then reports false and Open
+// relies on the address check alone.
 func NewGuard() (*Guard, error) {
-	host, err := open("/proc/1/ns/net")
-	if err != nil {
-		return nil, fmt.Errorf("open host netns: %w", err)
-	}
 	self, err := open("/proc/self/ns/net")
 	if err != nil {
-		_ = host.Close()
 		return nil, fmt.Errorf("open own netns: %w", err)
 	}
-	return &Guard{host: host, self: self}, nil
+	g := &Guard{self: self, procRoot: "/proc"}
+	if host, err := open("/proc/1/ns/net"); err == nil {
+		g.host = host
+	}
+	return g, nil
 }
+
+// HostKnown reports whether the host namespace could be identified.
+func (g *Guard) HostKnown() bool { return g.host != nil }
 
 // Close releases the guard's handles.
 func (g *Guard) Close() error {
-	return errors.Join(g.host.Close(), g.self.Close())
+	var err error
+	if g.host != nil {
+		err = g.host.Close()
+	}
+	return errors.Join(err, g.self.Close())
 }
 
 // SelfTest verifies the daemon may call setns: it enters its own namespace.
@@ -78,20 +91,55 @@ func (g *Guard) SelfTest() error {
 	return run(g.self, func() error { return nil })
 }
 
-// Open opens the network namespace of pid and refuses forbidden ones.
-func (g *Guard) Open(pid int) (*Handle, error) {
+// Open opens the network namespace of pid and refuses it unless it is
+// provably a container's:
+//   - it is not the daemon's own namespace, nor the host's (when known);
+//   - it holds one of the container's IPv4 addresses (read from
+//     /proc/<pid>/net/fib_trie, without entering the namespace). The host
+//     namespace never holds a container's bridge address.
+//
+// A container without IPv4 addresses is refused if the host is unknown.
+// Callers must still confirm afterwards that pid belongs to the container.
+func (g *Guard) Open(pid int, ips []netip.Addr) (*Handle, error) {
 	if pid <= 1 {
 		return nil, fmt.Errorf("invalid pid %d: %w", pid, ErrForbidden)
 	}
-	h, err := open(fmt.Sprintf("/proc/%d/ns/net", pid))
+	h, err := open(fmt.Sprintf("%s/%d/ns/net", g.procRoot, pid))
 	if err != nil {
 		return nil, err
 	}
-	if h.Same(g.host) || h.Same(g.self) {
+	if err := g.check(h, pid, ips); err != nil {
 		_ = h.Close()
-		return nil, ErrForbidden
+		return nil, err
 	}
 	return h, nil
+}
+
+func (g *Guard) check(h *Handle, pid int, ips []netip.Addr) error {
+	if h.Same(g.self) || (g.host != nil && h.Same(g.host)) {
+		return ErrForbidden
+	}
+	if len(ips) == 0 {
+		if g.host == nil {
+			return fmt.Errorf("container has no IPv4 address and the host netns is unknown, cannot prove the netns identity: %w", ErrForbidden)
+		}
+		return nil
+	}
+	f, err := os.Open(fmt.Sprintf("%s/%d/net/fib_trie", g.procRoot, pid))
+	if err != nil {
+		return fmt.Errorf("read local addresses: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+	local, err := LocalAddrs(f)
+	if err != nil {
+		return fmt.Errorf("read local addresses: %w", err)
+	}
+	for _, ip := range ips {
+		if local[ip] {
+			return nil
+		}
+	}
+	return fmt.Errorf("netns of pid %d does not hold the container's addresses %v: %w", pid, ips, ErrForbidden)
 }
 
 // Do runs fn on an OS thread switched into h. Sockets created by fn stay in

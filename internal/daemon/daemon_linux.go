@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
@@ -30,17 +31,18 @@ type Docker interface {
 // Enforcer programs and checks tables inside container namespaces.
 type Enforcer interface {
 	SelfTest() error
-	// Apply opens the netns of pid, calls confirm (which must fail if pid no
-	// longer belongs to the container) and atomically installs rs.
-	Apply(pid int, rs *nft.Ruleset, confirm func() error) error
+	// Apply opens the netns of pid (refusing it unless it holds one of ips),
+	// calls confirm (which must fail if pid no longer belongs to the
+	// container) and atomically installs rs.
+	Apply(pid int, ips []netip.Addr, rs *nft.Ruleset, confirm func() error) error
 	// Verify checks that the netns of pid holds rs (nft.ErrMissing,
 	// nft.ErrDrift otherwise).
-	Verify(pid int, rs *nft.Ruleset) error
+	Verify(pid int, ips []netip.Addr, rs *nft.Ruleset) error
 }
 
 // Lookuper resolves names from inside the netns of pid.
 type Lookuper interface {
-	Lookup(ctx context.Context, pid int, names []string) ([]resolver.Result, error)
+	Lookup(ctx context.Context, pid int, ips []netip.Addr, names []string) ([]resolver.Result, error)
 }
 
 const workers = 4
@@ -409,7 +411,7 @@ func (d *Daemon) sync(ctx context.Context, id string, kind jobKind) {
 			if d.cfg.DryRun {
 				return
 			}
-			err := d.enf.Verify(info.Pid, nft.Build(pol, nil, nft.Options{RejectAsDrop: rejectAsDrop}))
+			err := d.enf.Verify(info.Pid, info.IPs, nft.Build(pol, nil, nft.Options{RejectAsDrop: rejectAsDrop}))
 			if err == nil {
 				return
 			}
@@ -457,10 +459,10 @@ func (d *Daemon) sync(ctx context.Context, id string, kind jobKind) {
 
 	start := d.now()
 	confirm := d.confirmFunc(ctx, id, info.Pid)
-	err := d.applyWithRetry(ctx, info.Pid, rs, confirm)
+	err := d.applyWithRetry(ctx, info, rs, confirm)
 	if err != nil && !rejectAsDrop && !errors.Is(err, errContainerGone) {
 		dropRS := nft.Build(pol, elems, nft.Options{RejectAsDrop: true})
-		if derr := d.enf.Apply(info.Pid, dropRS, confirm); derr == nil {
+		if derr := d.enf.Apply(info.Pid, info.IPs, dropRS, confirm); derr == nil {
 			d.mu.Lock()
 			d.rejectAsDrop = true
 			d.mu.Unlock()
@@ -502,10 +504,10 @@ func (d *Daemon) confirmFunc(ctx context.Context, id string, pid int) func() err
 	}
 }
 
-func (d *Daemon) applyWithRetry(ctx context.Context, pid int, rs *nft.Ruleset, confirm func() error) error {
+func (d *Daemon) applyWithRetry(ctx context.Context, info *docker.Info, rs *nft.Ruleset, confirm func() error) error {
 	var err error
 	for attempt := 0; ; attempt++ {
-		err = d.enf.Apply(pid, rs, confirm)
+		err = d.enf.Apply(info.Pid, info.IPs, rs, confirm)
 		if err == nil || errors.Is(err, errContainerGone) || attempt >= len(d.retryDelays) {
 			return err
 		}

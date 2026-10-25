@@ -3,6 +3,8 @@
 package daemon
 
 import (
+	"net/netip"
+
 	"github.com/Ivan-Kuzmichev/dockfw/internal/netns"
 	"github.com/Ivan-Kuzmichev/dockfw/internal/nft"
 )
@@ -18,8 +20,8 @@ func (e *NetnsEnforcer) SelfTest() error { return e.Guard.SelfTest() }
 // Apply opens the namespace first and confirms the PID afterwards: once the
 // fd is open it pins the namespace, so a confirmed PID means the fd is the
 // container's namespace and not one of a recycled PID.
-func (e *NetnsEnforcer) Apply(pid int, rs *nft.Ruleset, confirm func() error) error {
-	h, err := e.Guard.Open(pid)
+func (e *NetnsEnforcer) Apply(pid int, ips []netip.Addr, rs *nft.Ruleset, confirm func() error) error {
+	h, err := e.Guard.Open(pid, ips)
 	if err != nil {
 		// Most often the container has just exited; let confirm say so.
 		if cerr := confirm(); cerr != nil {
@@ -35,8 +37,8 @@ func (e *NetnsEnforcer) Apply(pid int, rs *nft.Ruleset, confirm func() error) er
 }
 
 // Verify checks the table in the namespace of pid.
-func (e *NetnsEnforcer) Verify(pid int, rs *nft.Ruleset) error {
-	h, err := e.Guard.Open(pid)
+func (e *NetnsEnforcer) Verify(pid int, ips []netip.Addr, rs *nft.Ruleset) error {
+	h, err := e.Guard.Open(pid, ips)
 	if err != nil {
 		return err
 	}

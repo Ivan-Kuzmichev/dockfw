@@ -10,6 +10,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net"
+	"net/netip"
 	"time"
 
 	"github.com/Ivan-Kuzmichev/dockfw/internal/netns"
@@ -34,10 +35,10 @@ type Result struct {
 	Err     error
 }
 
-// Lookup resolves every name in the netns of pid. A failure for one name does
-// not affect the others.
-func (l *Lookuper) Lookup(ctx context.Context, pid int, names []string) ([]Result, error) {
-	h, err := l.Guard.Open(pid)
+// Lookup resolves every name in the netns of pid (which must hold one of
+// ips). A failure for one name does not affect the others.
+func (l *Lookuper) Lookup(ctx context.Context, pid int, ips []netip.Addr, names []string) ([]Result, error) {
+	h, err := l.Guard.Open(pid, ips)
 	if err != nil {
 		return nil, err
 	}

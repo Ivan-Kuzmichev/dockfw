@@ -81,10 +81,13 @@ func run(args []string) int {
 
 	guard, err := netns.NewGuard()
 	if err != nil {
-		log.Error("cannot open host/own network namespace (is pid: host set?)", "error", err)
+		log.Error("cannot open own network namespace", "error", err)
 		return 1
 	}
 	defer func() { _ = guard.Close() }()
+	if !guard.HostKnown() {
+		log.Warn("cannot open /proc/1/ns/net (AppArmor?): the host netns is excluded by checking each container netns for the container's own IP address")
+	}
 
 	lookup := &resolver.Lookuper{Guard: guard}
 	d := daemon.New(cfg, log, dc, &daemon.NetnsEnforcer{Guard: guard}, lookup)

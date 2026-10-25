@@ -92,7 +92,7 @@ func newFakeEnforcer() *fakeEnforcer {
 
 func (f *fakeEnforcer) SelfTest() error { return nil }
 
-func (f *fakeEnforcer) Apply(pid int, rs *nft.Ruleset, confirm func() error) error {
+func (f *fakeEnforcer) Apply(pid int, _ []netip.Addr, rs *nft.Ruleset, confirm func() error) error {
 	if err := confirm(); err != nil {
 		return err
 	}
@@ -113,7 +113,7 @@ func (f *fakeEnforcer) Apply(pid int, rs *nft.Ruleset, confirm func() error) err
 	return nil
 }
 
-func (f *fakeEnforcer) Verify(pid int, rs *nft.Ruleset) error {
+func (f *fakeEnforcer) Verify(pid int, _ []netip.Addr, rs *nft.Ruleset) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	t, ok := f.tables[pid]
@@ -461,7 +461,7 @@ type fakeLookup struct {
 	calls   map[int]int
 }
 
-func (f *fakeLookup) Lookup(_ context.Context, pid int, names []string) ([]resolver.Result, error) {
+func (f *fakeLookup) Lookup(_ context.Context, pid int, _ []netip.Addr, names []string) ([]resolver.Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls[pid]++

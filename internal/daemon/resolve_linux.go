@@ -4,6 +4,7 @@ package daemon
 
 import (
 	"context"
+	"net/netip"
 	"time"
 
 	"github.com/Ivan-Kuzmichev/dockfw/internal/policy"
@@ -13,6 +14,7 @@ import (
 type resolveTarget struct {
 	id, name string
 	pid      int
+	ips      []netip.Addr
 	domains  []string
 }
 
@@ -59,7 +61,7 @@ func (d *Daemon) resolveTargets(only string) []resolveTarget {
 			}
 		}
 		if len(names) > 0 {
-			out = append(out, resolveTarget{id: id, name: e.info.Name, pid: e.info.Pid, domains: names})
+			out = append(out, resolveTarget{id: id, name: e.info.Name, pid: e.info.Pid, ips: e.info.IPs, domains: names})
 		}
 	}
 	return out
@@ -69,7 +71,7 @@ func (d *Daemon) resolveTargets(only string) []resolveTarget {
 // answers and rebuilds the container's table with them.
 func (d *Daemon) resolve(ctx context.Context, t resolveTarget) {
 	log := d.log.With("container", t.name, "id", short(t.id))
-	results, err := d.lookup.Lookup(ctx, t.pid, t.domains)
+	results, err := d.lookup.Lookup(ctx, t.pid, t.ips, t.domains)
 	if err != nil {
 		if d.confirmFunc(ctx, t.id, t.pid)() == nil {
 			log.Warn("domain resolution failed", "error", err)

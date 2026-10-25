@@ -33,11 +33,18 @@ func TestLive(t *testing.T) {
 	if err := guard.SelfTest(); err != nil {
 		t.Fatalf("setns self-test: %v", err)
 	}
-	if _, err := guard.Open(1); !errors.Is(err, netns.ErrForbidden) {
-		t.Fatalf("host netns must be refused, got %v", err)
+	if _, err := guard.Open(1, nil); !errors.Is(err, netns.ErrForbidden) {
+		t.Fatalf("PID 1 must be refused, got %v", err)
+	}
+	if _, err := guard.Open(pid, []netip.Addr{ip("203.0.113.7")}); !errors.Is(err, netns.ErrForbidden) {
+		t.Fatalf("a netns without the expected address must be refused, got %v", err)
+	}
+	var ips []netip.Addr
+	if s := os.Getenv("DOCKFW_LIVE_IP"); s != "" {
+		ips = []netip.Addr{ip(s)}
 	}
 
-	h, err := guard.Open(pid)
+	h, err := guard.Open(pid, ips)
 	if err != nil {
 		t.Fatal(err)
 	}
