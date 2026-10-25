@@ -8,6 +8,8 @@ major = changed semantics of existing labels or defaults.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-26
+
 ### Added
 
 - Daemon that applies nftables rules inside container network namespaces
@@ -22,3 +24,6 @@ major = changed semantics of existing labels or defaults.
 - `fw.mode: audit` (log instead of reject) and `FW_DRY_RUN`.
 - `dockfw healthz` heartbeat check, `dockfw --version`.
 - Multi-arch `FROM scratch` image, CI, signed releases.
+
+[Unreleased]: https://github.com/Ivan-Kuzmichev/dockfw/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Ivan-Kuzmichev/dockfw/releases/tag/v0.1.0
