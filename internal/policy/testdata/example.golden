@@ -1,0 +1,60 @@
+container dublyarr
+locked    no
+mode      enforce
+internet  no
+peers     172.20.0.11 172.20.0.12
+in-peers  -
+cidrs     -
+domains   api.themoviedb.org image.tmdb.org
+inbound   192.168.1.0/24:3000/tcp+udp
+private   10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16
+hash      f61fbc65ce112f1e
+
+container qbittorrent
+locked    no
+mode      enforce
+internet  yes
+peers     -
+in-peers  172.20.0.10
+cidrs     -
+domains   -
+inbound   192.168.1.0/24:8787/tcp+udp any:54890/tcp+udp
+private   10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16
+hash      af1bbb799cb75dcd
+
+container jackett
+locked    no
+mode      audit
+internet  yes
+peers     -
+in-peers  172.20.0.10
+cidrs     192.168.1.5/32
+domains   -
+inbound   -
+private   10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16
+hash      3d094fb4d569347d
+
+container vaultwarden
+locked    no
+mode      enforce
+internet  no
+peers     -
+in-peers  -
+cidrs     -
+domains   -
+inbound   192.168.1.0/24:80/tcp
+private   10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16
+hash      6131607185f303c6
+
+container broken
+locked    yes (invalid labels)
+mode      enforce
+internet  no
+peers     -
+in-peers  -
+cidrs     -
+domains   -
+inbound   -
+private   10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16
+hash      971fba01067f8502
+
