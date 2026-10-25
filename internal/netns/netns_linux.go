@@ -116,7 +116,7 @@ func (g *Guard) Open(pid int, ips []netip.Addr) (*Handle, error) {
 }
 
 func (g *Guard) check(h *Handle, pid int, ips []netip.Addr) error {
-	if h.Same(g.self) || (g.host != nil && h.Same(g.host)) {
+	if g.forbidden(h) {
 		return ErrForbidden
 	}
 	if len(ips) == 0 {
@@ -147,10 +147,15 @@ func (g *Guard) check(h *Handle, pid int, ips []netip.Addr) error {
 // scheduler: it exits with the goroutine, so no other goroutine can ever run
 // in the wrong namespace.
 func (g *Guard) Do(h *Handle, fn func() error) error {
-	if h.Same(g.host) || h.Same(g.self) {
+	if g.forbidden(h) {
 		return ErrForbidden
 	}
 	return run(h, fn)
+}
+
+// forbidden reports whether h is the daemon's or (if known) the host's netns.
+func (g *Guard) forbidden(h *Handle) bool {
+	return h.Same(g.self) || (g.host != nil && h.Same(g.host))
 }
 
 func run(h *Handle, fn func() error) error {
