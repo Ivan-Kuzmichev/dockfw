@@ -1,0 +1,23 @@
+# dockfw with direct access to the Docker socket.
+# Prerequisite on the host: docker network create fw
+services:
+  dockfw:
+    image: ghcr.io/ivan-kuzmichev/dockfw:latest
+    container_name: dockfw
+    pid: host
+    network_mode: none
+    read_only: true
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, SYS_ADMIN, SYS_PTRACE]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: [/tmp]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      FW_UNLABELED: deny
+      FW_NETWORK: fw
+    healthcheck:
+      test: ["CMD", "/dockfw", "healthz"]
+      interval: 30s
+      start_period: 10s

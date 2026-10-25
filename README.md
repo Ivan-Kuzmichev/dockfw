@@ -151,6 +151,15 @@ namespace: the host's namespace (PID 1's) and its own are refused before any
 `setns`. If all your containers run their PID 1 as root you can try dropping
 `SYS_PTRACE`.
 
+On hosts with AppArmor (Debian, Ubuntu) Docker's `docker-default` profile
+does not let dockfw open the host's namespace, so dockfw logs a warning at
+start and instead proves every namespace it touches is the container's own:
+the namespace must hold the container's IP address (checked from
+`/proc/<pid>/net/fib_trie`, without entering it) and the PID is re-checked with
+Docker after the namespace is opened. The same profile also prevents dockfw
+from opening containers that run with a different AppArmor profile
+(`privileged`, `apparmor:unconfined`); those are reported as `degraded`.
+
 ### With the Docker socket
 
 See [`docker-compose.example.yml`](docker-compose.example.yml).
@@ -169,7 +178,7 @@ services:
     container_name: dockfw-socket-proxy
     restart: unless-stopped
     read_only: true
-    tmpfs: [/run]
+    tmpfs: [/run, /tmp]
     networks: [dockfw-api]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
