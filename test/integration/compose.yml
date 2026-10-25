@@ -1,0 +1,114 @@
+# Integration environment for test/integration (spec §11). The daemon runs
+# exactly as in docker-compose.example.yml; workloads use the tools image.
+name: dockfw-it
+
+x-tools: &tools
+  image: dockfw-it-tools
+  networks: [fw]
+  restart: "no"
+
+services:
+  dockfw:
+    build: { context: ../.., args: { VERSION: 0.0.0-it } }
+    image: dockfw:it
+    container_name: it-dockfw
+    pid: host
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, SYS_ADMIN, SYS_PTRACE]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: [/tmp]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      FW_UNLABELED: deny
+      FW_NETWORK: dockfw-it-fw
+      FW_RECONCILE_INTERVAL: 3s
+      FW_RESOLVE_INTERVAL: 20s
+    healthcheck:
+      test: ["CMD", "/dockfw", "healthz"]
+      interval: 5s
+      start_period: 10s
+
+  tools:
+    build: { context: ., dockerfile: Dockerfile.tools }
+    image: dockfw-it-tools
+    profiles: [build-only]
+
+  # 1. Internet only.
+  web:
+    <<: *tools
+    container_name: it-web
+    labels: { fw.enable: "true", fw.allow.internet: "true" }
+
+  # 2. a -> b, symmetry is one-way, c reaches nobody.
+  a:
+    <<: *tools
+    container_name: it-a
+    labels: { fw.enable: "true", fw.allow.containers: "b" }
+  b:
+    <<: *tools
+    container_name: it-b
+    labels: { fw.enable: "true" }
+  c:
+    <<: *tools
+    container_name: it-c
+    labels: { fw.enable: "true" }
+
+  # 3. Domains only.
+  dom:
+    <<: *tools
+    container_name: it-dom
+    labels: { fw.enable: "true", fw.allow.domains: "example.com" }
+
+  # 4. Inbound from the host via a published port.
+  pub:
+    <<: *tools
+    container_name: it-pub
+    ports: ["18080:8080"]
+    labels: { fw.enable: "true", fw.inbound: "0.0.0.0/0:8080" }
+  nopub:
+    <<: *tools
+    container_name: it-nopub
+    ports: ["18081:8080"]
+    labels: { fw.enable: "true" }
+
+  # 6. Invalid label: fully locked.
+  bad:
+    <<: *tools
+    container_name: it-bad
+    labels: { fw.enable: "true", fw.allow.internet: "true", fw.inbound: "any:http" }
+
+  # 8. Audit mode: traffic passes, rules log.
+  audit:
+    <<: *tools
+    container_name: it-audit
+    labels: { fw.enable: "true", fw.mode: "audit" }
+
+  # 9. FW_UNLABELED=deny only applies to FW_NETWORK.
+  unlabeled:
+    <<: *tools
+    container_name: it-unlabeled
+  othernet:
+    <<: *tools
+    container_name: it-othernet
+    networks: [other]
+
+  # A listener on the host itself (scenario 1: the host must be unreachable).
+  hostsrv:
+    image: dockfw-it-tools
+    container_name: it-hostsrv
+    network_mode: host
+    command: ["busybox-extras", "httpd", "-f", "-p", "18999", "-h", "/www"]
+
+  # Load for the "30 containers in < 5 s" acceptance criterion.
+  filler:
+    <<: *tools
+    labels: { fw.enable: "true", fw.allow.containers: "b", fw.inbound: "any:8080" }
+
+networks:
+  fw:
+    name: dockfw-it-fw
+  other:
+    name: dockfw-it-other
