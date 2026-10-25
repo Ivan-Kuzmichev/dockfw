@@ -1,0 +1,65 @@
+table inet dockfw {
+  set peers4 { type ipv4_addr; }
+  set cidrs4 { type ipv4_addr; flags interval; }
+  set domains4 { type ipv4_addr; flags timeout; }
+  set in_peers4 { type ipv4_addr; }
+  chain output {
+    type filter hook output priority filter; policy drop;
+    oif "lo" accept comment "dockfw policy 1e6b6efeef0aaead"
+      [ meta load oifname => reg 1 ]
+      [ cmp eq reg 1 0x6c6f0000000000000000000000000000 ]
+      [ immediate reg 0 accept ]
+    ct state established,related accept
+      [ ct load state => reg 1 ]
+      [ bitwise reg 1 = ( reg 1 & 0x06000000 ) ^ 0x00000000 ]
+      [ cmp neq reg 1 0x00000000 ]
+      [ immediate reg 0 accept ]
+    meta nfproto ipv6 counter drop
+      [ meta load nfproto => reg 1 ]
+      [ cmp eq reg 1 0x0a ]
+      [ counter ]
+      [ immediate reg 0 drop ]
+    ip daddr @peers4 accept
+      [ meta load nfproto => reg 1 ]
+      [ cmp eq reg 1 0x02 ]
+      [ payload load 4b @ network header + 16 => reg 1 ]
+      [ lookup reg 1 set peers4 id 1 ]
+      [ immediate reg 0 accept ]
+    ip daddr @cidrs4 accept
+      [ meta load nfproto => reg 1 ]
+      [ cmp eq reg 1 0x02 ]
+      [ payload load 4b @ network header + 16 => reg 1 ]
+      [ lookup reg 1 set cidrs4 id 2 ]
+      [ immediate reg 0 accept ]
+    ip daddr @domains4 accept
+      [ meta load nfproto => reg 1 ]
+      [ cmp eq reg 1 0x02 ]
+      [ payload load 4b @ network header + 16 => reg 1 ]
+      [ lookup reg 1 set domains4 id 3 ]
+      [ immediate reg 0 accept ]
+    counter drop
+      [ counter ]
+      [ immediate reg 0 drop ]
+  }
+  chain input {
+    type filter hook input priority filter; policy drop;
+    iif "lo" accept
+      [ meta load iifname => reg 1 ]
+      [ cmp eq reg 1 0x6c6f0000000000000000000000000000 ]
+      [ immediate reg 0 accept ]
+    ct state established,related accept
+      [ ct load state => reg 1 ]
+      [ bitwise reg 1 = ( reg 1 & 0x06000000 ) ^ 0x00000000 ]
+      [ cmp neq reg 1 0x00000000 ]
+      [ immediate reg 0 accept ]
+    ip saddr @in_peers4 accept
+      [ meta load nfproto => reg 1 ]
+      [ cmp eq reg 1 0x02 ]
+      [ payload load 4b @ network header + 12 => reg 1 ]
+      [ lookup reg 1 set in_peers4 id 4 ]
+      [ immediate reg 0 accept ]
+    counter drop
+      [ counter ]
+      [ immediate reg 0 drop ]
+  }
+}

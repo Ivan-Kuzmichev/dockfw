@@ -35,3 +35,19 @@ DNS не умеет перечислять поддомены, а резолве
 - **`github.com/moby/moby/client` вместо `github.com/docker/docker/client`.** Модуль `docker/docker` заморожен на v28.5.2 (`+incompatible`), клиент Docker теперь развивается как `moby/moby/client`. API тот же (`ContainerList`, `ContainerInspect`, `Events`), поддерживает `DOCKER_HOST` через `client.FromEnv`.
 - **Go 1.27**, а не 1.22: актуальные `moby/moby/client` и `google/nftables` требуют свежий toolchain, 1.22 давно без поддержки.
 - **`google/nftables` собирается только под Linux** (`golang.org/x/sys/unix` без `NFPROTO_*` на darwin). Поэтому `make test` на macOS гоняет тесты в контейнере `golang:1.27`, а `make lint` использует `GOOS=linux`.
+
+## Проверка `google/nftables` в чужом netns (шаг 3)
+
+Проверено на Docker Desktop (linux/arm64, ядро 6.10): `alpine sleep inf` в пользовательской сети, тест `internal/nft/live_linux_test.go` запущен в контейнере ровно с правами из §10 (`--pid host --network none --read-only --cap-drop ALL --cap-add NET_ADMIN,SYS_ADMIN,SYS_PTRACE --security-opt no-new-privileges`). Затем с хоста `nsenter -t <pid> -n nft list ruleset`.
+
+Результат: работает как описано в ТЗ, обходов не понадобилось. Нюансы:
+
+- **`WithNetNSFd(fd)` сам делает `setns`.** `mdlayher/netlink` открывает netlink-сокет на залоченном потоке внутри netns. Fd 0 библиотека понимает как «текущий netns», поэтому `nft.Apply` отказывается от fd ≤ 0.
+- **Атомарная замена таблицы:** в одном batch `add table` (без `NLM_F_EXCL`, на существующей таблице ничего не делает) → `delete table` → `add table` + наборы, цепочки, правила. Так `delete` никогда не падает на отсутствующей таблице, а замена остаётся одной транзакцией.
+- **Глобальный счётчик ID наборов.** `nftables.AddSet` берёт ID из глобальной переменной без синхронизации, если `Set.ID == 0`. При параллельном применении в разные netns это гонка данных. Поэтому ID наборов задаются явно (1..n в пределах batch), и `Lookup` ссылается на них.
+- **Интервальные наборы:** хватает пар «начало / конец+1 с `IntervalEnd`», ведущий элемент `0.0.0.0` не нужен; `nft list` показывает `10.8.0.0/24, 192.168.1.5`. Пересекающиеся и смежные префиксы сливаются заранее, иначе ядро отвергает batch.
+- **NAT Docker DNS не тронут:** до и после применения `table ip nat` (`DOCKER_OUTPUT`, `DOCKER_POSTROUTING`) идентична, `nslookup` из контейнера работает. Наш `oif "lo" accept` пропускает DNAT на 127.0.0.11.
+- **`reject with icmpx admin-prohibited` в `output` работает** для локально созданных пакетов. TCP-клиент получает `Host is unreachable` примерно через 1 с (ядро считает ICMP в `SYN_SENT` «мягкой» ошибкой и сообщает её после первого ретрансмита), а не через 2 минуты, как при `drop`. Можно было бы добавить `tcp reset` для мгновенного `ECONNREFUSED`, но это меняет правила §4. Оставлено как в ТЗ.
+- **Защита хоста:** `netns.Guard` открывает `/proc/1/ns/net` (с `pid: host` это netns хоста) и собственный netns демона и сравнивает dev:inode любого открываемого netns с ними. Совпадение → отказ до любого `setns`/netlink. PID ≤ 1 отвергается сразу.
+- **Поток после `setns` не возвращается в планировщик.** Для кода, который должен выполниться внутри netns (резолвер), используется отдельная горутина с `LockOSThread` без `UnlockOSThread`: поток умирает вместе с горутиной, восстанавливать netns не нужно и ошибиться нельзя.
+- **IPv6 в `output`** закрыт правилом `meta nfproto ipv6 reject` сразу после `established` (см. решение 4 выше).
